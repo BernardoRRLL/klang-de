@@ -1,7 +1,7 @@
 import { TUTORS } from '../data/curriculum';
 
 const GEMINI_API_KEY = (import.meta.env.VITE_GEMINI_API_KEY || '').trim();
-const MODELS_TO_TRY = ['gemini-2.5-flash', 'gemini-2.0-flash'];
+const MODELS_TO_TRY = ['gemini-3.8-flash', 'gemini-flash'];
 
 async function requestGeminiJSON(promptText) {
   if (!GEMINI_API_KEY) {
