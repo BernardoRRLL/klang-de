@@ -2,7 +2,6 @@ import { TUTORS } from '../data/curriculum';
 
 const GEMINI_API_KEY = (import.meta.env.VITE_GEMINI_API_KEY || '').trim();
 
-// Cascada de modelos actuales de Google ordenados por velocidad y estabilidad
 const MODELS_CASCADING = [
   'gemini-3.8-flash',
   'gemini-3.5-flash-lite',
@@ -23,14 +22,13 @@ async function callModelWithFallback(contents) {
             body: JSON.stringify({
               contents,
               generationConfig: {
-                temperature: 0.5,
+                temperature: 0.3, // Reducido para mayor velocidad y determinismo
                 responseMimeType: 'application/json'
               }
             })
           }
         );
 
-        // Si hay alta demanda o límite temporal, reintentar o pasar al siguiente modelo
         if (res.status === 503 || res.status === 429) {
           await new Promise((r) => setTimeout(r, 400));
           continue;
@@ -39,7 +37,7 @@ async function callModelWithFallback(contents) {
         if (!res.ok) {
           const errText = await res.text();
           lastError = new Error(`${modelName}: ${res.status} - ${errText}`);
-          break; // Probar el siguiente modelo de la lista
+          break;
         }
 
         const data = await res.json();
@@ -54,7 +52,7 @@ async function callModelWithFallback(contents) {
     }
   }
 
-  throw lastError || new Error('Los servidores de Google están saturados temporalmente. Inténtalo de nuevo.');
+  throw lastError || new Error('Saturación en los servidores de IA.');
 }
 
 export async function generateTutorTurn({
@@ -66,44 +64,38 @@ export async function generateTutorTurn({
   studentName,
   isInitial = false
 }) {
-  if (!GEMINI_API_KEY) {
-    throw new Error('Falta VITE_GEMINI_API_KEY en GitHub Secrets');
-  }
+  if (!GEMINI_API_KEY) throw new Error('Falta VITE_GEMINI_API_KEY');
 
   const tutorName = TUTORS[tutorId]?.name || 'Stefan';
 
-  const systemPrompt = `Eres ${tutorName}, un profesor de alemán estilo Praktika AI enseñándole a ${studentName}.
-Tema actual: "${lesson.title}". Situación: ${lesson.scenario}.
-Modo de corrección: ${correctionMode === 'strict' ? 'Estricto' : 'Fluido'}.
+  // PROMPT OPTIMIZADO: JSON plano, directo y fácil de procesar para Llama 3 o Gemini Flash
+  const systemPrompt = `Eres ${tutorName}, profesor de alemán de ${studentName}.
+Tema: "${lesson.title}". Escenario: ${lesson.scenario}. Modo: ${correctionMode === 'strict' ? 'Estricto' : 'Fluido'}.
 
-Debes responder SIEMPRE en formato JSON estricto con esta estructura exacta (sin markdown extra, solo el objeto JSON):
+REGLA ABSOLUTA: Responde SOLO con un objeto JSON plano. Separa estrictamente tu explicación en español de tu frase en alemán.
+Estructura obligatoria:
 {
-  "spoken_response": "Lo que le dices en voz alta al alumno en español/alemán",
-  "german_focus": "La frase clave en alemán principal de este turno",
-  "spanish_translation": "Traducción al español",
-  "correction": {
-    "has_error": false,
-    "better_german": "",
-    "explanation": ""
-  },
-  "completed_objective_indexes": [],
-  "new_vocab": [{"german": "", "spanish": "", "phonetic": ""}],
-  "suggested_replies": [
-    {"german": "...", "spanish": "...", "phonetic": "..."},
-    {"german": "...", "spanish": "...", "phonetic": "..."},
-    {"german": "...", "spanish": "...", "phonetic": "..."}
+  "spanish_text": "Tu comentario, explicación o saludo en español nativo",
+  "german_text": "La frase principal en alemán nativo",
+  "has_error": false,
+  "correction_es": "Si cometió un error, explícalo brevemente aquí en español (o vacío)",
+  "correction_de": "La corrección exacta en alemán (o vacío)",
+  "suggestions": [
+    {"de": "Opción 1 en alemán", "es": "Traducción 1"},
+    {"de": "Opción 2 en alemán", "es": "Traducción 2"}
   ]
 }`;
 
   const contents = [
     { role: 'user', parts: [{ text: systemPrompt }] },
-    { role: 'model', parts: [{ text: 'Entendido. Comenzamos la sesión.' }] }
+    { role: 'model', parts: [{ text: '{"spanish_text": "Entendido.", "german_text": "Verstanden.", "has_error": false, "correction_es": "", "correction_de": "", "suggestions": []}' }] }
   ];
 
   history.slice(-4).forEach((msg) => {
     contents.push({
       role: msg.role === 'user' ? 'user' : 'model',
-      parts: [{ text: msg.rawText || msg.text || msg.spoken_response || '' }]
+      // Adaptado al nuevo formato para mantener contexto
+      parts: [{ text: msg.rawText || msg.text || `${msg.spanish_text} ${msg.german_text}` }]
     });
   });
 
@@ -118,17 +110,9 @@ Debes responder SIEMPRE en formato JSON estricto con esta estructura exacta (sin
 
 export async function translatePanicQuery(query) {
   if (!GEMINI_API_KEY) throw new Error('Falta API Key');
-
-  const contents = [
-    {
-      role: 'user',
-      parts: [
-        {
-          text: `Traduce al alemán: "${query}". Devuelve SOLO un JSON: {"german": "...", "spanish": "...", "phonetic": "...", "tip": "..."}`
-        }
-      ]
-    }
-  ];
-
+  const contents = [{
+    role: 'user',
+    parts: [{ text: `Traduce al alemán: "${query}". Devuelve SOLO JSON: {"german": "...", "spanish": "...", "phonetic": "...", "tip": "..."}` }]
+  }];
   return callModelWithFallback(contents);
 }
