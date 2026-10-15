@@ -1,67 +1,7 @@
 import { TUTORS } from '../data/curriculum';
 
 const GEMINI_API_KEY = (import.meta.env.VITE_GEMINI_API_KEY || '').trim();
-
-// Lista ampliada de modelos y alias para evitar el bloqueo por 503 de alta demanda
-const MODELS_TO_TRY = [
-  'gemini-3.8-flash',
-  'gemini-2.5-flash',
-  'gemini-flash',
-  'gemini-1.5-flash'
-];
-
-async function requestGeminiJSON(promptText) {
-  if (!GEMINI_API_KEY) {
-    throw new Error('Falta VITE_GEMINI_API_KEY en GitHub Secrets');
-  }
-
-  let lastError = null;
-
-  for (const modelName of MODELS_TO_TRY) {
-    // Intentar hasta 2 veces por cada modelo si da error temporal 503
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        const res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${GEMINI_API_KEY}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ role: 'user', parts: [{ text: promptText }] }],
-              generationConfig: {
-                temperature: 0.65,
-                responseMimeType: 'application/json'
-              }
-            })
-          }
-        );
-
-        if (res.status === 503 || res.status === 429) {
-          // Si es alta demanda, esperar 600ms antes del segundo intento en el mismo modelo
-          await new Promise((r) => setTimeout(r, 600));
-          continue;
-        }
-
-        if (!res.ok) {
-          const errBody = await res.text();
-          lastError = new Error(`Modelo ${modelName}: ${res.status} - ${errBody}`);
-          break; // Salir al siguiente modelo si el error no es de alta demanda
-        }
-
-        const data = await res.json();
-        const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (rawText) {
-          const cleaned = rawText.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
-          return JSON.parse(cleaned);
-        }
-      } catch (err) {
-        lastError = err;
-      }
-    }
-  }
-
-  throw lastError || new Error('Los servidores de Google están experimentando alta demanda (Error 503). Inténtalo de nuevo en unos segundos.');
-}
+const MODEL_NAME = 'gemini-3.8-flash';
 
 export async function generateTutorTurn({
   userText,
@@ -72,78 +12,123 @@ export async function generateTutorTurn({
   studentName,
   isInitial = false
 }) {
-  const tutorName = TUTORS[tutorId]?.name || 'Stefan';
-  const userTurnCount = history.filter((m) => m.role === 'user').length;
-
-  const recentConversation = history
-    .slice(-8)
-    .map((m) => `${m.role === 'user' ? 'Alumno' : tutorName}: ${m.rawText || m.text || m.spoken_response}`)
-    .join('\n');
-
-  const prompt = `
-Eres ${tutorName}, un profesor y coach privado de alemán estilo Praktika AI enseñándole a ${studentName}.
-REGLA DE AUDIO: Tu campo "spoken_response" será leído de corrido por una única voz alemana. Sé cálido, conciso y natural.
-
-DATOS DE LA SESIÓN:
-- Tema: "${lesson.title}" (${lesson.level})
-- Situación: ${lesson.scenario}
-- Objetivos de la lección (índices 0, 1, 2):
-  0: ${lesson.objectives?.[0] || 'Practicar vocabulario'}
-  1: ${lesson.objectives?.[1] || 'Construir frases'}
-  2: ${lesson.objectives?.[2] || 'Mantener la conversación'}
-- Intervenciones actuales del alumno en esta sesión: ${userTurnCount} de mínimo 6 recomendadas.
-- Modo de corrección: ${
-    correctionMode === 'strict'
-      ? 'ESTRICTO: Si hay errores de gramática o pronunciación, corrígelos amablemente en tu audio y haz que repita.'
-      : 'FLUIDO: Prioriza la charla natural; deja las correcciones técnicas en el objeto "correction".'
+  if (!GEMINI_API_KEY) {
+    throw new Error('Falta VITE_GEMINI_API_KEY en GitHub Secrets');
   }
 
-REGLA DE PROGRESO (MUY IMPORTANTE):
-- NO des por completados todos los objetivos de golpe. Lleva la clase paso a paso.
-- Solo incluye en "completed_objective_indexes" el índice (0, 1 o 2) que el alumno REALMENTE acaba de demostrar en este turno.
+  const tutorName = TUTORS[tutorId]?.name || 'Stefan';
 
-HISTORIAL RECIENTE:
-${recentConversation || '(Inicio de la sesión)'}
+  // Prompt optimizado y ligero para respuesta ultrarrápida
+  const systemPrompt = `Eres ${tutorName}, un profesor de alemán estilo Praktika AI enseñándole a ${studentName}.
+Tema actual: "${lesson.title}". Situación: ${lesson.scenario}.
+Modo de corrección: ${correctionMode === 'strict' ? 'Estricto' : 'Fluido'}.
 
-${
-  isInitial
-    ? `INSTRUCCIÓN ACTUAL: Inicia la sesión saludando a ${studentName}, preséntale brevemente el reto de hoy ("${lesson.title}") y hazle la primera pregunta o ejercicio práctico.`
-    : `INSTRUCCIÓN ACTUAL: El alumno acaba de decir por micrófono: "${userText}". Evalúa lo que dijo, corrígelo si aplica y continúa la conversación haciéndole la siguiente pregunta para que siga hablando.`
-}
-
-Devuelve EXCLUSIVAMENTE un JSON válido con esta estructura exacta:
+Debes responder SIEMPRE en formato JSON estricto con esta estructura exacta (sin markdown extra, solo el objeto JSON):
 {
-  "spoken_response": "Lo que tú le dices hablándole directamente (mezclando español y alemán según su nivel)",
-  "german_focus": "La frase clave en alemán que estás enseñando o usando en este turno",
-  "spanish_translation": "Traducción al español de german_focus",
+  "spoken_response": "Lo que le dices en voz alta al alumno en español/alemán",
+  "german_focus": "La frase clave en alemán principal de este turno",
+  "spanish_translation": "Traducción al español",
   "correction": {
     "has_error": false,
-    "user_said": "${isInitial ? '' : userText.replace(/"/g, "'")}",
-    "better_german": "Frase corregida en alemán (o vacío si estuvo perfecto)",
-    "explanation": "Explicación breve en español de qué mejorar o felicitación puntual"
+    "better_german": "",
+    "explanation": ""
   },
   "completed_objective_indexes": [],
-  "new_vocab": [
-    { "german": "Frase o palabra clave", "spanish": "Significado", "phonetic": "Pronunciación figurada" }
-  ],
+  "new_vocab": [{"german": "", "spanish": "", "phonetic": ""}],
   "suggested_replies": [
-    { "german": "Respuesta sugerida 1 en alemán", "spanish": "Traducción", "phonetic": "Pronunciación figurada" },
-    { "german": "Respuesta sugerida 2 en alemán", "spanish": "Traducción", "phonetic": "Pronunciación figurada" },
-    { "german": "Respuesta sugerida 3 en alemán", "spanish": "Traducción", "phonetic": "Pronunciación figurada" }
+    {"german": "...", "spanish": "...", "phonetic": "..."},
+    {"german": "...", "spanish": "...", "phonetic": "..."},
+    {"german": "...", "spanish": "...", "phonetic": "..."}
   ]
 }`;
 
-  return requestGeminiJSON(prompt);
+  // Mantener solo los últimos 4 mensajes para evitar latencia alta
+  const contents = [
+    { role: 'user', parts: [{ text: systemPrompt }] },
+    { role: 'model', parts: [{ text: 'Entendido. Comenzamos la sesión de práctica conversacional.' }] }
+  ];
+
+  history.slice(-4).forEach((msg) => {
+    contents.push({
+      role: msg.role === 'user' ? 'user' : 'model',
+      parts: [{ text: msg.rawText || msg.text || msg.spoken_response || '' }]
+    });
+  });
+
+  if (!isInitial) {
+    contents.push({ role: 'user', parts: [{ text: `El alumno dijo: "${userText}"` }] });
+  } else {
+    contents.push({ role: 'user', parts: [{ text: `Inicia la clase saludando y proponiendo el primer ejercicio.` }] });
+  }
+
+  // Petición optimizada con reintento único por alta demanda
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${GEMINI_API_KEY}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents,
+            generationConfig: {
+              temperature: 0.5,
+              responseMimeType: 'application/json'
+            }
+          })
+        }
+      );
+
+      if (res.status === 503 || res.status === 429) {
+        await new Promise((r) => setTimeout(r, 800));
+        continue;
+      }
+
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`Error ${res.status}: ${errText}`);
+      }
+
+      const data = await res.json();
+      const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (rawText) {
+        const cleaned = rawText.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
+        return JSON.parse(cleaned);
+      }
+    } catch (err) {
+      if (attempt === 2) throw err;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+
+  throw new Error('Servidores con alta demanda. Intenta de nuevo.');
 }
 
 export async function translatePanicQuery(query) {
-  const prompt = `El alumno en mitad de su clase de alemán pregunta: "¿Cómo digo en alemán: ${query}?".
-Devuelve EXCLUSIVAMENTE un JSON válido con esta estructura:
-{
-  "german": "Frase natural en alemán",
-  "spanish": "Significado exacto",
-  "phonetic": "Pronunciación figurada fácil para un chileno/hispanohablante",
-  "tip": "Consejo corto de pronunciación o uso"
-}`;
-  return requestGeminiJSON(prompt);
+  if (!GEMINI_API_KEY) throw new Error('Falta API Key');
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${GEMINI_API_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                text: `Traduce al alemán: "${query}". Devuelve SOLO un JSON: {"german": "...", "spanish": "...", "phonetic": "...", "tip": "..."}`
+              }
+            ]
+          }
+        ],
+        generationConfig: { responseMimeType: 'application/json' }
+      })
+    }
+  );
+
+  const data = await res.json();
+  const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  return JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```$/i, '').trim());
 }
