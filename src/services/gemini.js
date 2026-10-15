@@ -1,7 +1,14 @@
 import { TUTORS } from '../data/curriculum';
 
 const GEMINI_API_KEY = (import.meta.env.VITE_GEMINI_API_KEY || '').trim();
-const MODELS_TO_TRY = ['gemini-3.8-flash'];
+
+// Lista ampliada de modelos y alias para evitar el bloqueo por 503 de alta demanda
+const MODELS_TO_TRY = [
+  'gemini-3.8-flash',
+  'gemini-2.5-flash',
+  'gemini-flash',
+  'gemini-1.5-flash'
+];
 
 async function requestGeminiJSON(promptText) {
   if (!GEMINI_API_KEY) {
@@ -11,40 +18,49 @@ async function requestGeminiJSON(promptText) {
   let lastError = null;
 
   for (const modelName of MODELS_TO_TRY) {
-    try {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${GEMINI_API_KEY}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ role: 'user', parts: [{ text: promptText }] }],
-            generationConfig: {
-              temperature: 0.65,
-              responseMimeType: 'application/json'
-            }
-          })
+    // Intentar hasta 2 veces por cada modelo si da error temporal 503
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${GEMINI_API_KEY}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ role: 'user', parts: [{ text: promptText }] }],
+              generationConfig: {
+                temperature: 0.65,
+                responseMimeType: 'application/json'
+              }
+            })
+          }
+        );
+
+        if (res.status === 503 || res.status === 429) {
+          // Si es alta demanda, esperar 600ms antes del segundo intento en el mismo modelo
+          await new Promise((r) => setTimeout(r, 600));
+          continue;
         }
-      );
 
-      if (!res.ok) {
-        const errBody = await res.text();
-        lastError = new Error(`Modelo ${modelName}: ${res.status} - ${errBody}`);
-        continue;
-      }
+        if (!res.ok) {
+          const errBody = await res.text();
+          lastError = new Error(`Modelo ${modelName}: ${res.status} - ${errBody}`);
+          break; // Salir al siguiente modelo si el error no es de alta demanda
+        }
 
-      const data = await res.json();
-      const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (rawText) {
-        const cleaned = rawText.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
-        return JSON.parse(cleaned);
+        const data = await res.json();
+        const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (rawText) {
+          const cleaned = rawText.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
+          return JSON.parse(cleaned);
+        }
+      } catch (err) {
+        lastError = err;
       }
-    } catch (err) {
-      lastError = err;
     }
   }
 
-  throw lastError || new Error('No se pudo conectar con Gemini API');
+  throw lastError || new Error('Los servidores de Google están experimentando alta demanda (Error 503). Inténtalo de nuevo en unos segundos.');
 }
 
 export async function generateTutorTurn({
