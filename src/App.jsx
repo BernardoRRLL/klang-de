@@ -11,9 +11,8 @@ export default function App() {
   const [authSession, setAuthSession] = useState(() => supabaseService.getCurrentSession());
   const [profiles, setProfiles] = useState([]);
   const [activeProfileId, setActiveProfileId] = useState(null);
-  const [view, setView] = useState('profiles'); // 'profiles' | 'dashboard' | 'session' | 'notebook'
+  const [view, setView] = useState('profiles');
 
-  // Estado de la lección activa
   const [activeLesson, setActiveLesson] = useState(null);
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -57,8 +56,8 @@ export default function App() {
     }
   }, [authSession]);
 
-  // Síntesis de voz continua (Edge Neural TTS -> Respaldo voz alemana del dispositivo)
-  const speakText = async (text, customRate = null) => {
+  // Se añade el parámetro lang para separar los motores de voz
+  const speakText = async (text, customRate = null, lang = 'de') => {
     if (!text) return;
     const tutorId = activeProfile?.preferred_tutor || 'stefan';
     const rate = customRate || activeProfile?.speech_rate || 0.85;
@@ -72,7 +71,8 @@ export default function App() {
     setIsSpeaking(true);
 
     try {
-      const audioUrl = await supabaseService.fetchEdgeTTS(text, tutorId, rate);
+      // Pasamos el lang a la función por si klang-tts lo soporta en el futuro
+      const audioUrl = await supabaseService.fetchEdgeTTS(text, tutorId, rate, lang);
       if (audioUrl) {
         const audio = new Audio(audioUrl);
         audioPlayerRef.current = audio;
@@ -82,12 +82,12 @@ export default function App() {
         return;
       }
     } catch {
-      // Fallback automático al motor del dispositivo
+      // Fallback
     }
 
     if ('speechSynthesis' in window) {
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = 'de-DE';
+      utterance.lang = lang === 'es' ? 'es-ES' : 'de-DE';
       utterance.rate = rate;
       utterance.onend = () => setIsSpeaking(false);
       utterance.onerror = () => setIsSpeaking(false);
@@ -114,9 +114,14 @@ export default function App() {
       setActiveSessionId(existingSession.id);
       setMessages(existingSession.messages);
       const lastTutor = [...existingSession.messages].reverse().find((m) => m.role === 'tutor');
-      setSuggestedReplies(lastTutor?.suggested_replies || []);
+      
+      // Soporte retroactivo para sesiones antiguas
+      setSuggestedReplies(lastTutor?.suggestions || lastTutor?.suggested_replies || []);
       setCompletedObjectives([]);
-      if (lastTutor?.spoken_response) speakText(lastTutor.spoken_response);
+      
+      if (lastTutor?.spanish_text) speakText(lastTutor.spanish_text, 1.0, 'es');
+      else if (lastTutor?.german_text) speakText(lastTutor.german_text, undefined, 'de');
+      else if (lastTutor?.spoken_response) speakText(lastTutor.spoken_response, undefined, 'de');
       return;
     }
 
@@ -138,18 +143,23 @@ export default function App() {
         isInitial: true
       });
 
+      // Mapeo al nuevo formato de Groq
       const firstMsg = {
         id: Date.now(),
         role: 'tutor',
-        spoken_response: aiRes.spoken_response,
-        german_focus: aiRes.german_focus,
-        spanish_translation: aiRes.spanish_translation,
-        suggested_replies: aiRes.suggested_replies || []
+        spanish_text: aiRes.spanish_text || '',
+        german_text: aiRes.german_text || '',
+        has_error: aiRes.has_error || false,
+        correction_es: aiRes.correction_es || '',
+        correction_de: aiRes.correction_de || '',
+        suggestions: aiRes.suggestions || []
       };
 
       setMessages([firstMsg]);
-      setSuggestedReplies(aiRes.suggested_replies || []);
-      speakText(aiRes.spoken_response);
+      setSuggestedReplies(firstMsg.suggestions);
+      
+      if (firstMsg.spanish_text) speakText(firstMsg.spanish_text, 1.0, 'es');
+      else if (firstMsg.german_text) speakText(firstMsg.german_text, undefined, 'de');
 
       const saved = await supabaseService.saveSession({
         id: newSessionId,
@@ -197,20 +207,23 @@ export default function App() {
         isInitial: false
       });
 
+      // Mapeo al nuevo formato de Groq
       const tutorMsg = {
         id: Date.now() + 1,
         role: 'tutor',
-        spoken_response: aiRes.spoken_response,
-        german_focus: aiRes.german_focus,
-        spanish_translation: aiRes.spanish_translation,
-        correction: aiRes.correction,
-        suggested_replies: aiRes.suggested_replies || []
+        spanish_text: aiRes.spanish_text || '',
+        german_text: aiRes.german_text || '',
+        has_error: aiRes.has_error || false,
+        correction_es: aiRes.correction_es || '',
+        correction_de: aiRes.correction_de || '',
+        suggestions: aiRes.suggestions || []
       };
 
       const finalMessages = [...updatedHistory, tutorMsg];
       setMessages(finalMessages);
-      setSuggestedReplies(aiRes.suggested_replies || []);
+      setSuggestedReplies(tutorMsg.suggestions);
 
+      // Prevención de errores si Groq omite estos arrays opcionales
       if (Array.isArray(aiRes.completed_objective_indexes)) {
         setCompletedObjectives((prev) =>
           Array.from(new Set([...prev, ...aiRes.completed_objective_indexes]))
@@ -252,7 +265,9 @@ export default function App() {
         );
       }
 
-      speakText(aiRes.spoken_response);
+      if (tutorMsg.spanish_text) speakText(tutorMsg.spanish_text, 1.0, 'es');
+      else if (tutorMsg.german_text) speakText(tutorMsg.german_text, undefined, 'de');
+
     } catch (err) {
       setApiError(err.message);
     } finally {
@@ -280,12 +295,10 @@ export default function App() {
     setView('dashboard');
   };
 
-  // 1. Si no ha iniciado sesión -> Mostrar Login
   if (!authSession) {
     return <LoginScreen onLoginSuccess={(session) => setAuthSession(session)} />;
   }
 
-  // 2. Selección de Perfil estilo Netflix
   if (view === 'profiles' || !activeProfile) {
     return (
       <ProfilePicker
@@ -310,7 +323,6 @@ export default function App() {
     );
   }
 
-  // 3. Cuaderno de Vocabulario
   if (view === 'notebook') {
     return (
       <NotebookView
@@ -331,7 +343,6 @@ export default function App() {
     );
   }
 
-  // 4. Sala de Práctica Minimalista
   if (view === 'session' && activeLesson) {
     return (
       <PracticeRoom
@@ -354,7 +365,6 @@ export default function App() {
     );
   }
 
-  // 5. Dashboard Principal
   return (
     <Dashboard
       profile={activeProfile}
