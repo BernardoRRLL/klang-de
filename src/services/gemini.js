@@ -121,3 +121,34 @@ export async function translatePanicQuery(query) {
   
   return callGroqWithFallback(messages);
 }
+
+export async function transcribeAudioWithGroq(audioBlob) {
+  if (!GROQ_API_KEY) throw new Error('Falta API Key de Groq');
+
+  const formData = new FormData();
+  // Whisper requiere un nombre de archivo genérico con extensión
+  formData.append('file', audioBlob, 'audio.webm');
+  formData.append('model', 'whisper-large-v3-turbo');
+  formData.append('language', 'de'); // Fuerza el reconocimiento estricto en alemán
+  formData.append('response_format', 'json');
+
+  try {
+    const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${GROQ_API_KEY}`
+      },
+      body: formData
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Error Whisper: ${res.status} - ${errText}`);
+    }
+
+    const data = await res.json();
+    return data.text.trim();
+  } catch (err) {
+    throw new Error(`Fallo en transcripción: ${err.message}`);
+  }
+}
