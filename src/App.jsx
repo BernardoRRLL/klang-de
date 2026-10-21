@@ -11,7 +11,7 @@ export default function App() {
   const [authSession, setAuthSession] = useState(() => supabaseService.getCurrentSession());
   const [profiles, setProfiles] = useState([]);
   const [activeProfileId, setActiveProfileId] = useState(null);
-  const [view, setView] = useState('profiles');
+  const [view, setView] = useState('profiles'); // 'profiles' | 'dashboard' | 'session' | 'notebook'
 
   const [activeLesson, setActiveLesson] = useState(null);
   const [activeSessionId, setActiveSessionId] = useState(null);
@@ -56,43 +56,32 @@ export default function App() {
     }
   }, [authSession]);
 
-  // Se añade el parámetro lang para separar los motores de voz
+  // Síntesis de voz nativa del dispositivo (Elimina la latencia de red y errores 500)
   const speakText = async (text, customRate = null, lang = 'de') => {
     if (!text) return;
-    const tutorId = activeProfile?.preferred_tutor || 'stefan';
     const rate = customRate || activeProfile?.speech_rate || 0.85;
 
+    // Detener cualquier audio previo
     if (audioPlayerRef.current) {
       audioPlayerRef.current.pause();
       audioPlayerRef.current = null;
     }
-    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-
-    setIsSpeaking(true);
-
-    try {
-      // Pasamos el lang a la función por si klang-tts lo soporta en el futuro
-      const audioUrl = await supabaseService.fetchEdgeTTS(text, tutorId, rate, lang);
-      if (audioUrl) {
-        const audio = new Audio(audioUrl);
-        audioPlayerRef.current = audio;
-        audio.onended = () => setIsSpeaking(false);
-        audio.onerror = () => setIsSpeaking(false);
-        await audio.play();
-        return;
-      }
-    } catch {
-      // Fallback
-    }
-
+    
     if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      setIsSpeaking(true);
+
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = lang === 'es' ? 'es-ES' : 'de-DE';
+      // Asigna el idioma correcto para que el motor nativo sepa cómo pronunciar
+      utterance.lang = lang === 'es' ? 'es-ES' : 'de-DE'; 
       utterance.rate = rate;
+      
       utterance.onend = () => setIsSpeaking(false);
       utterance.onerror = () => setIsSpeaking(false);
+      
       window.speechSynthesis.speak(utterance);
     } else {
+      console.warn("Este navegador no soporta síntesis de voz nativa.");
       setIsSpeaking(false);
     }
   };
@@ -115,7 +104,6 @@ export default function App() {
       setMessages(existingSession.messages);
       const lastTutor = [...existingSession.messages].reverse().find((m) => m.role === 'tutor');
       
-      // Soporte retroactivo para sesiones antiguas
       setSuggestedReplies(lastTutor?.suggestions || lastTutor?.suggested_replies || []);
       setCompletedObjectives([]);
       
@@ -143,7 +131,6 @@ export default function App() {
         isInitial: true
       });
 
-      // Mapeo al nuevo formato de Groq
       const firstMsg = {
         id: Date.now(),
         role: 'tutor',
@@ -207,7 +194,6 @@ export default function App() {
         isInitial: false
       });
 
-      // Mapeo al nuevo formato de Groq
       const tutorMsg = {
         id: Date.now() + 1,
         role: 'tutor',
@@ -223,7 +209,6 @@ export default function App() {
       setMessages(finalMessages);
       setSuggestedReplies(tutorMsg.suggestions);
 
-      // Prevención de errores si Groq omite estos arrays opcionales
       if (Array.isArray(aiRes.completed_objective_indexes)) {
         setCompletedObjectives((prev) =>
           Array.from(new Set([...prev, ...aiRes.completed_objective_indexes]))
