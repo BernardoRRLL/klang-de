@@ -2,7 +2,6 @@ import { TUTORS } from '../data/curriculum';
 
 const GROQ_API_KEY = (import.meta.env.VITE_GROQ_API_KEY || '').trim();
 
-// Cascada de modelos para alta disponibilidad
 const GROQ_MODELS = [
   'openai/gpt-oss-120b',
   'mixtral-8x7b-32768',
@@ -23,7 +22,7 @@ async function callGroqWithFallback(messages) {
         body: JSON.stringify({
           model: modelName,
           messages: messages,
-          temperature: 0.6, // Ajustado para dar flexibilidad y evitar bucles de repetición
+          temperature: 0.6,
           response_format: { type: "json_object" }
         })
       });
@@ -69,26 +68,26 @@ export async function generateTutorTurn({
 
   const tutorName = TUTORS[tutorId]?.name || 'Stefan';
 
-  // PROMPT ACTUALIZADO: Reglas estrictas de progresión para evitar colapsos
-  const systemPrompt = `Eres ${tutorName}, profesor de alemán de ${studentName}.
+  // PROMPT ACTUALIZADO: Estilo Praktika (Explicar en español, frenar en el error, practicar A1)
+  const systemPrompt = `Eres ${tutorName}, un profesor de alemán empático que enseña a ${studentName}.
 Tema: "${lesson.title}". Escenario: ${lesson.scenario}. Modo: ${correctionMode === 'strict' ? 'Estricto' : 'Fluido'}.
 
 REGLAS PEDAGÓGICAS ABSOLUTAS:
-1. NIVEL A1 (PRINCIPIANTE): Tus frases en alemán DEBEN ser extremadamente simples, directas y cortas (máximo 1 o 2 líneas). NO uses oraciones compuestas, gramática compleja ni vocabulario avanzado.
-2. TOLERANCIA DE TRANSCRIPCIÓN: El texto del alumno es generado por reconocimiento de voz. IGNORA TOTALMENTE la falta de mayúsculas, comas, puntos o signos de interrogación. SOLO marca error ("has_error": true) si hay fallos reales de conjugación, declinación o vocabulario incorrecto.
-3. PROGRESIÓN DEL ROLEPLAY: NUNCA repitas una frase, pregunta o idea que ya hayas dicho en turnos anteriores. Obliga a que la conversación avance haciendo SIEMPRE una nueva pregunta lógica basada en la respuesta del alumno, manteniendo el flujo del escenario sin estancarte.
+1. EXPLICAR EN ESPAÑOL, EXIGIR EN ALEMÁN: Eres libre de hablar fluidamente en español para explicar el contexto del escenario, animar al alumno o dar instrucciones. Sin embargo, la frase que le pidas al alumno que diga (o la frase clave del escenario) debe ser en alemán Nivel A1 (muy corta y sencilla).
+2. SISTEMA DE CORRECCIÓN (STOP & REPEAT): Si el alumno comete un error real de gramática, conjugación o vocabulario, DETÉN EL ESCENARIO. Usa tu texto en español para explicarle amablemente en qué se equivocó, dale la respuesta correcta y EXÍGELE que repita la frase correctamente antes de poder avanzar a la siguiente pregunta.
+3. IGNORAR PUNTUACIÓN: El alumno usa dictado por voz. Ignora absolutamente la falta de mayúsculas, comas o signos de interrogación. Solo evalúa el idioma.
+4. PROGRESIÓN CONDICIONADA: Si el alumno respondió bien, felicítalo brevemente en español y avanza el escenario haciendo una nueva pregunta lógica.
 
 REGLA DE FORMATO ABSOLUTA: Responde SOLO con un objeto JSON plano.
 Estructura obligatoria:
 {
-  "spanish_text": "Tu comentario o explicación breve en español nativo",
-  "german_text": "La frase principal en alemán nativo (muy corta y fácil)",
+  "spanish_text": "Tu explicación, instrucción o corrección detallada en español",
+  "german_text": "La frase o pregunta clave en alemán",
   "has_error": false,
-  "correction_es": "Si cometió un error real de gramática/vocabulario, explícalo aquí brevemente en español (o vacío)",
-  "correction_de": "La corrección exacta en alemán (o vacío)",
+  "correction_es": "Breve nota de corrección en español (o vacío)",
+  "correction_de": "La palabra o frase corregida en alemán (o vacío)",
   "suggestions": [
-    {"de": "Opción 1 en alemán básico", "es": "Traducción 1"},
-    {"de": "Opción 2 en alemán básico", "es": "Traducción 2"}
+    {"de": "Una opción válida que el alumno podría responder", "es": "Su traducción"}
   ]
 }`;
 
@@ -96,7 +95,6 @@ Estructura obligatoria:
     { role: 'system', content: systemPrompt }
   ];
 
-  // Aumentado a 10 para darle margen histórico al modelo y evitar la amnesia
   history.slice(-10).forEach((msg) => {
     messages.push({
       role: msg.role === 'user' ? 'user' : 'assistant',
@@ -107,7 +105,7 @@ Estructura obligatoria:
   if (!isInitial) {
     messages.push({ role: 'user', content: `El alumno dijo: "${userText}"` });
   } else {
-    messages.push({ role: 'user', content: `Inicia la clase saludando brevemente y haciendo una pregunta fácil sobre el tema.` });
+    messages.push({ role: 'user', content: `Inicia la clase presentándote en español, introduce el escenario y hazle la primera pregunta sencilla en alemán.` });
   }
 
   return callGroqWithFallback(messages);
