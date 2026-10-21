@@ -56,12 +56,19 @@ export default function App() {
     }
   }, [authSession]);
 
-  // Síntesis de voz nativa del dispositivo (Elimina la latencia de red y errores 500)
+  // Forzar la carga de voces en navegadores basados en WebKit/Chrome
+  useEffect(() => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.getVoices();
+    }
+  }, []);
+
+  // Síntesis de voz nativa con selección de género
   const speakText = async (text, customRate = null, lang = 'de') => {
     if (!text) return;
     const rate = customRate || activeProfile?.speech_rate || 0.85;
+    const tutorId = activeProfile?.preferred_tutor || 'stefan';
 
-    // Detener cualquier audio previo
     if (audioPlayerRef.current) {
       audioPlayerRef.current.pause();
       audioPlayerRef.current = null;
@@ -72,10 +79,36 @@ export default function App() {
       setIsSpeaking(true);
 
       const utterance = new SpeechSynthesisUtterance(text);
-      // Asigna el idioma correcto para que el motor nativo sepa cómo pronunciar
       utterance.lang = lang === 'es' ? 'es-ES' : 'de-DE'; 
       utterance.rate = rate;
       
+      // Escaneo de voces instaladas
+      const voices = window.speechSynthesis.getVoices();
+      const langPrefix = lang === 'es' ? 'es' : 'de';
+      const availableVoices = voices.filter(v => v.lang.toLowerCase().startsWith(langPrefix));
+
+      if (availableVoices.length > 0) {
+        if (lang === 'de') {
+          // Identificadores comunes en motores TTS nativos (iOS, Android, Windows, macOS)
+          const maleNames = ['stefan', 'martin', 'markus', 'yannick', 'david', 'male', 'hombre'];
+          const femaleNames = ['anna', 'helena', 'petra', 'hedda', 'katja', 'marlene', 'female', 'mujer'];
+
+          let preferredVoice = null;
+
+          if (tutorId === 'stefan') {
+            preferredVoice = availableVoices.find(v => maleNames.some(name => v.name.toLowerCase().includes(name)));
+          } else {
+            preferredVoice = availableVoices.find(v => femaleNames.some(name => v.name.toLowerCase().includes(name)));
+          }
+
+          // Si no encuentra una de género específico, usa Google por defecto o la primera disponible
+          utterance.voice = preferredVoice || availableVoices.find(v => v.name.includes('Google')) || availableVoices[0];
+        } else {
+          // Para el texto en español, busca una voz estándar
+          utterance.voice = availableVoices.find(v => v.name.includes('Google')) || availableVoices[0];
+        }
+      }
+
       utterance.onend = () => setIsSpeaking(false);
       utterance.onerror = () => setIsSpeaking(false);
       
