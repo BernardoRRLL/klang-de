@@ -1,38 +1,62 @@
 import { TUTORS } from '../data/curriculum';
 
-// 1. Cambiamos la API Key a la de Groq
 const GROQ_API_KEY = (import.meta.env.VITE_GROQ_API_KEY || '').trim();
 
-// 2. Nueva función base que reemplaza la cascada de Gemini
-async function callGroqModel(messages) {
-  try {
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-       model: 'qwen-3.8-27b', // Modelo ultra rápido
-        messages: messages,
-        temperature: 0.3,
-        response_format: { type: "json_object" } // Fuerza el JSON estricto
-      })
-    });
+// Cascada de modelos para alta disponibilidad
+const GROQ_MODELS = [
+  'openai/gpt-oss-120b',
+  'mixtral-8x7b-32768',
+  'gemma2-9b-it'
+];
 
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Error de Groq: ${res.status} - ${errText}`);
+async function callGroqWithFallback(messages) {
+  let lastError = null;
+
+  for (const modelName of GROQ_MODELS) {
+    try {
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${GROQ_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: modelName,
+          messages: messages,
+          temperature: 0.3,
+          response_format: { type: "json_object" }
+        })
+      });
+
+      // Si el modelo fue dado de baja (404) o no es compatible (400), forzamos el salto
+      if (res.status === 404 || res.status === 400) {
+        const errText = await res.text();
+        lastError = new Error(`${modelName} falló: ${res.status} - ${errText}`);
+        continue; 
+      }
+
+      if (!res.ok) {
+        const errText = await res.text();
+        // Si el error es de autorización (401), la clave está mal y no tiene sentido iterar
+        if (res.status === 401) {
+            throw new Error(`Error de API Key (401). Verifica VITE_GROQ_API_KEY.`);
+        }
+        throw new Error(`Error de red con ${modelName}: ${res.status} - ${errText}`);
+      }
+
+      const data = await res.json();
+      const rawText = data.choices[0].message.content;
+      const cleaned = rawText.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
+      return JSON.parse(cleaned);
+
+    } catch (err) {
+      lastError = err;
+      // Rompemos el ciclo si es un error crítico de autorización
+      if (err.message.includes('401')) throw err;
     }
-
-    const data = await res.json();
-    const rawText = data.choices[0].message.content;
-    const cleaned = rawText.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
-    return JSON.parse(cleaned);
-
-  } catch (err) {
-    throw new Error(`Fallo en el motor de IA: ${err.message}`);
   }
+
+  throw lastError || new Error('Todos los modelos de la cascada fallaron o están descontinuados.');
 }
 
 export async function generateTutorTurn({
@@ -48,7 +72,6 @@ export async function generateTutorTurn({
 
   const tutorName = TUTORS[tutorId]?.name || 'Stefan';
 
-  // 3. Mantenemos el prompt plano estructurado que App.jsx ya está esperando
   const systemPrompt = `Eres ${tutorName}, profesor de alemán de ${studentName}.
 Tema: "${lesson.title}". Escenario: ${lesson.scenario}. Modo: ${correctionMode === 'strict' ? 'Estricto' : 'Fluido'}.
 
@@ -66,14 +89,13 @@ Estructura obligatoria:
   ]
 }`;
 
-  // 4. Adaptamos el historial al formato role/content de Groq/OpenAI
   const messages = [
     { role: 'system', content: systemPrompt }
   ];
 
   history.slice(-4).forEach((msg) => {
     messages.push({
-      role: msg.role === 'user' ? 'user' : 'assistant', // Groq usa 'assistant' en lugar de 'model'
+      role: msg.role === 'user' ? 'user' : 'assistant',
       content: msg.rawText || msg.text || `${msg.spanish_text} ${msg.german_text}`
     });
   });
@@ -84,7 +106,7 @@ Estructura obligatoria:
     messages.push({ role: 'user', content: `Inicia la clase saludando y proponiendo el primer ejercicio.` });
   }
 
-  return callGroqModel(messages);
+  return callGroqWithFallback(messages);
 }
 
 export async function translatePanicQuery(query) {
@@ -95,5 +117,5 @@ export async function translatePanicQuery(query) {
     { role: 'user', content: query }
   ];
   
-  return callGroqModel(messages);
+  return callGroqWithFallback(messages);
 }
