@@ -13,7 +13,7 @@ async function callGroqModel(messages) {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'llama3-8b-8192', // Modelo ultra rápido
+       model: 'llama-3.1-8b-instant', // Modelo ultra rápido
         messages: messages,
         temperature: 0.3,
         response_format: { type: "json_object" } // Fuerza el JSON estricto
