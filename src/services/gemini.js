@@ -1,58 +1,38 @@
 import { TUTORS } from '../data/curriculum';
 
-const GEMINI_API_KEY = (import.meta.env.VITE_GEMINI_API_KEY || '').trim();
+// 1. Cambiamos la API Key a la de Groq
+const GROQ_API_KEY = (import.meta.env.VITE_GROQ_API_KEY || '').trim();
 
-const MODELS_CASCADING = [
-  'gemini-3.8-flash',
-  'gemini-3.5-flash-lite',
-  'gemini-flash'
-];
+// 2. Nueva función base que reemplaza la cascada de Gemini
+async function callGroqModel(messages) {
+  try {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${GROQ_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'llama3-8b-8192', // Modelo ultra rápido
+        messages: messages,
+        temperature: 0.3,
+        response_format: { type: "json_object" } // Fuerza el JSON estricto
+      })
+    });
 
-async function callModelWithFallback(contents) {
-  let lastError = null;
-
-  for (const modelName of MODELS_CASCADING) {
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        const res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${GEMINI_API_KEY}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents,
-              generationConfig: {
-                temperature: 0.3, // Reducido para mayor velocidad y determinismo
-                responseMimeType: 'application/json'
-              }
-            })
-          }
-        );
-
-        if (res.status === 503 || res.status === 429) {
-          await new Promise((r) => setTimeout(r, 400));
-          continue;
-        }
-
-        if (!res.ok) {
-          const errText = await res.text();
-          lastError = new Error(`${modelName}: ${res.status} - ${errText}`);
-          break;
-        }
-
-        const data = await res.json();
-        const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (rawText) {
-          const cleaned = rawText.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
-          return JSON.parse(cleaned);
-        }
-      } catch (err) {
-        lastError = err;
-      }
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Error de Groq: ${res.status} - ${errText}`);
     }
-  }
 
-  throw lastError || new Error('Saturación en los servidores de IA.');
+    const data = await res.json();
+    const rawText = data.choices[0].message.content;
+    const cleaned = rawText.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
+    return JSON.parse(cleaned);
+
+  } catch (err) {
+    throw new Error(`Fallo en el motor de IA: ${err.message}`);
+  }
 }
 
 export async function generateTutorTurn({
@@ -64,11 +44,11 @@ export async function generateTutorTurn({
   studentName,
   isInitial = false
 }) {
-  if (!GEMINI_API_KEY) throw new Error('Falta VITE_GEMINI_API_KEY');
+  if (!GROQ_API_KEY) throw new Error('Falta VITE_GROQ_API_KEY en GitHub Secrets');
 
   const tutorName = TUTORS[tutorId]?.name || 'Stefan';
 
-  // PROMPT OPTIMIZADO: JSON plano, directo y fácil de procesar para Llama 3 o Gemini Flash
+  // 3. Mantenemos el prompt plano estructurado que App.jsx ya está esperando
   const systemPrompt = `Eres ${tutorName}, profesor de alemán de ${studentName}.
 Tema: "${lesson.title}". Escenario: ${lesson.scenario}. Modo: ${correctionMode === 'strict' ? 'Estricto' : 'Fluido'}.
 
@@ -86,33 +66,34 @@ Estructura obligatoria:
   ]
 }`;
 
-  const contents = [
-    { role: 'user', parts: [{ text: systemPrompt }] },
-    { role: 'model', parts: [{ text: '{"spanish_text": "Entendido.", "german_text": "Verstanden.", "has_error": false, "correction_es": "", "correction_de": "", "suggestions": []}' }] }
+  // 4. Adaptamos el historial al formato role/content de Groq/OpenAI
+  const messages = [
+    { role: 'system', content: systemPrompt }
   ];
 
   history.slice(-4).forEach((msg) => {
-    contents.push({
-      role: msg.role === 'user' ? 'user' : 'model',
-      // Adaptado al nuevo formato para mantener contexto
-      parts: [{ text: msg.rawText || msg.text || `${msg.spanish_text} ${msg.german_text}` }]
+    messages.push({
+      role: msg.role === 'user' ? 'user' : 'assistant', // Groq usa 'assistant' en lugar de 'model'
+      content: msg.rawText || msg.text || `${msg.spanish_text} ${msg.german_text}`
     });
   });
 
   if (!isInitial) {
-    contents.push({ role: 'user', parts: [{ text: `El alumno dijo: "${userText}"` }] });
+    messages.push({ role: 'user', content: `El alumno dijo: "${userText}"` });
   } else {
-    contents.push({ role: 'user', parts: [{ text: `Inicia la clase saludando y proponiendo el primer ejercicio.` }] });
+    messages.push({ role: 'user', content: `Inicia la clase saludando y proponiendo el primer ejercicio.` });
   }
 
-  return callModelWithFallback(contents);
+  return callGroqModel(messages);
 }
 
 export async function translatePanicQuery(query) {
-  if (!GEMINI_API_KEY) throw new Error('Falta API Key');
-  const contents = [{
-    role: 'user',
-    parts: [{ text: `Traduce al alemán: "${query}". Devuelve SOLO JSON: {"german": "...", "spanish": "...", "phonetic": "...", "tip": "..."}` }]
-  }];
-  return callModelWithFallback(contents);
+  if (!GROQ_API_KEY) throw new Error('Falta API Key de Groq');
+  
+  const messages = [
+    { role: 'system', content: 'Traduce al alemán. Devuelve SOLO JSON: {"german": "...", "spanish": "...", "phonetic": "...", "tip": "..."}' },
+    { role: 'user', content: query }
+  ];
+  
+  return callGroqModel(messages);
 }
