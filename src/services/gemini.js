@@ -23,12 +23,11 @@ async function callGroqWithFallback(messages) {
         body: JSON.stringify({
           model: modelName,
           messages: messages,
-          temperature: 0.3,
+          temperature: 0.6, // Ajustado para dar flexibilidad y evitar bucles de repetición
           response_format: { type: "json_object" }
         })
       });
 
-      // Si el modelo fue dado de baja (404) o no es compatible (400), forzamos el salto
       if (res.status === 404 || res.status === 400) {
         const errText = await res.text();
         lastError = new Error(`${modelName} falló: ${res.status} - ${errText}`);
@@ -37,7 +36,6 @@ async function callGroqWithFallback(messages) {
 
       if (!res.ok) {
         const errText = await res.text();
-        // Si el error es de autorización (401), la clave está mal y no tiene sentido iterar
         if (res.status === 401) {
             throw new Error(`Error de API Key (401). Verifica VITE_GROQ_API_KEY.`);
         }
@@ -51,7 +49,6 @@ async function callGroqWithFallback(messages) {
 
     } catch (err) {
       lastError = err;
-      // Rompemos el ciclo si es un error crítico de autorización
       if (err.message.includes('401')) throw err;
     }
   }
@@ -72,13 +69,14 @@ export async function generateTutorTurn({
 
   const tutorName = TUTORS[tutorId]?.name || 'Stefan';
 
-  // PROMPT ACTUALIZADO: Reglas estrictas de nivel A1 y tolerancia a la transcripción de voz
+  // PROMPT ACTUALIZADO: Reglas estrictas de progresión para evitar colapsos
   const systemPrompt = `Eres ${tutorName}, profesor de alemán de ${studentName}.
 Tema: "${lesson.title}". Escenario: ${lesson.scenario}. Modo: ${correctionMode === 'strict' ? 'Estricto' : 'Fluido'}.
 
 REGLAS PEDAGÓGICAS ABSOLUTAS:
 1. NIVEL A1 (PRINCIPIANTE): Tus frases en alemán DEBEN ser extremadamente simples, directas y cortas (máximo 1 o 2 líneas). NO uses oraciones compuestas, gramática compleja ni vocabulario avanzado.
 2. TOLERANCIA DE TRANSCRIPCIÓN: El texto del alumno es generado por reconocimiento de voz. IGNORA TOTALMENTE la falta de mayúsculas, comas, puntos o signos de interrogación. SOLO marca error ("has_error": true) si hay fallos reales de conjugación, declinación o vocabulario incorrecto.
+3. PROGRESIÓN DEL ROLEPLAY: NUNCA repitas una frase, pregunta o idea que ya hayas dicho en turnos anteriores. Obliga a que la conversación avance haciendo SIEMPRE una nueva pregunta lógica basada en la respuesta del alumno, manteniendo el flujo del escenario sin estancarte.
 
 REGLA DE FORMATO ABSOLUTA: Responde SOLO con un objeto JSON plano.
 Estructura obligatoria:
@@ -98,7 +96,8 @@ Estructura obligatoria:
     { role: 'system', content: systemPrompt }
   ];
 
-  history.slice(-4).forEach((msg) => {
+  // Aumentado a 10 para darle margen histórico al modelo y evitar la amnesia
+  history.slice(-10).forEach((msg) => {
     messages.push({
       role: msg.role === 'user' ? 'user' : 'assistant',
       content: msg.rawText || msg.text || `${msg.spanish_text} ${msg.german_text}`
