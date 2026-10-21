@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Mic, Volume2, ChevronLeft, SlidersHorizontal, Lightbulb,
-  HelpCircle, CheckCircle2, X, Radio, AlertTriangle, Send
+  HelpCircle, CheckCircle2, X, Radio, AlertTriangle, Send, Eye, EyeOff
 } from 'lucide-react';
 import { TUTORS } from '../data/curriculum';
 import { translatePanicQuery, transcribeAudioWithGroq } from '../services/gemini';
@@ -35,6 +35,9 @@ export default function PracticeRoom({
   const [panicQuery, setPanicQuery] = useState('');
   const [panicResult, setPanicResult] = useState(null);
   const [isPanicLoading, setIsPanicLoading] = useState(false);
+  
+  // Estado para rastrear qué mensajes tienen la traducción visible
+  const [revealedTranslations, setRevealedTranslations] = useState(new Set());
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -69,7 +72,7 @@ export default function PracticeRoom({
 
       mediaRecorder.onstop = async () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        stream.getTracks().forEach(track => track.stop()); // Apaga la luz del micrófono
+        stream.getTracks().forEach(track => track.stop()); 
         
         setIsTranscribing(true);
         try {
@@ -77,7 +80,6 @@ export default function PracticeRoom({
           if (micMode === 'auto') {
             onSendUserTurn(text);
           } else {
-            // Walkie-Talkie: Deja el texto en el input para edición manual
             setLiveTranscript(text);
           }
         } catch (err) {
@@ -123,6 +125,15 @@ export default function PracticeRoom({
     } finally {
       setIsPanicLoading(false);
     }
+  };
+
+  const toggleTranslation = (msgId) => {
+    setRevealedTranslations(prev => {
+      const next = new Set(prev);
+      if (next.has(msgId)) next.delete(msgId);
+      else next.add(msgId);
+      return next;
+    });
   };
 
   const isFallbackActive = apiError && apiError.includes('falló');
@@ -196,6 +207,8 @@ export default function PracticeRoom({
             );
           }
 
+          const isRevealed = revealedTranslations.has(msg.id);
+
           return (
             <div key={msg.id} className="space-y-2">
               {msg.has_error && msg.correction_de && (
@@ -209,12 +222,31 @@ export default function PracticeRoom({
 
               <div className="rounded-3xl rounded-tl-md bg-slate-900/90 border border-slate-800/80 p-4 space-y-3">
                 {msg.spanish_text && <p className="text-sm text-slate-300 leading-relaxed">{msg.spanish_text}</p>}
+                
                 {msg.german_text && (
-                  <div className="rounded-2xl bg-slate-950/90 border border-slate-800/80 p-3 flex items-center justify-between gap-3 mt-2">
-                    <p className="font-bold text-sm text-amber-300">{msg.german_text}</p>
-                    <button onClick={() => playBilingualAudio(msg)} className="p-2 rounded-xl bg-indigo-500/20 text-indigo-300">
-                      <Volume2 className="w-4 h-4" />
-                    </button>
+                  <div className="rounded-2xl bg-slate-950/90 border border-slate-800/80 p-3 flex flex-col gap-2 mt-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <p className={`font-bold text-sm transition-colors duration-300 ${isRevealed ? 'text-sky-300' : 'text-amber-300'}`}>
+                         {isRevealed && msg.suggestions && msg.suggestions.length > 0 
+                            // Intentamos usar la primera sugerencia como traducción aproximada si la pediste, o un texto de aviso si no hay
+                            ? msg.suggestions[0]?.es || "No hay traducción exacta disponible para esta frase."
+                            : msg.german_text}
+                      </p>
+                      
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button 
+                          onClick={() => toggleTranslation(msg.id)} 
+                          className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition"
+                          title="Traducir"
+                        >
+                          {isRevealed ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+
+                        <button onClick={() => playBilingualAudio(msg)} className="p-2 rounded-xl bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 transition">
+                          <Volume2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
@@ -225,10 +257,55 @@ export default function PracticeRoom({
         <div ref={chatEndRef} />
       </div>
 
+      {showHintsDrawer && suggestedReplies && suggestedReplies.length > 0 && (
+        <div className="bg-slate-900 border-t border-slate-800 px-4 py-3 space-y-2 max-h-56 overflow-y-auto">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-amber-400">
+              Frases sugeridas
+            </span>
+            <button
+              onClick={() => setShowHintsDrawer(false)}
+              className="text-xs text-slate-400 hover:text-white"
+            >
+              Ocultar
+            </button>
+          </div>
+          {/* Modificado para scroll horizontal en celulares si son muchas */}
+          <div className="flex sm:grid sm:grid-cols-3 gap-2 overflow-x-auto pb-2 snap-x">
+            {suggestedReplies.map((reply, i) => (
+              <div key={i} className="min-w-[240px] sm:min-w-0 rounded-2xl bg-slate-950 border border-slate-800 p-2.5 flex flex-col justify-between gap-1.5 snap-center">
+                <div>
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="font-bold text-xs text-white leading-snug">{reply.de}</p>
+                    <button
+                      onClick={() => onSpeakText(reply.de, 0.8, 'de')}
+                      className="p-1 rounded-lg bg-slate-900 text-amber-300 shrink-0"
+                    >
+                      <Volume2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-emerald-400 mt-1 leading-tight">{reply.es}</p>
+                </div>
+                <div className="flex items-center justify-end pt-1.5 border-t border-slate-900">
+                  <button
+                    onClick={() => {
+                      setShowHintsDrawer(false);
+                      onSendUserTurn(reply.de);
+                    }}
+                    className="text-[10px] font-semibold px-2 py-1 rounded-lg bg-indigo-950 text-indigo-300 hover:bg-indigo-900"
+                  >
+                    Usar
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <footer className="bg-slate-950 border-t border-slate-900 px-4 py-3 shrink-0">
         <div className="max-w-xl mx-auto space-y-3">
           
-          {/* Nuevo módulo de edición para modo Walkie-Talkie */}
           {micMode === 'ptt' && (liveTranscript || isTranscribing) && (
             <div className="flex items-end gap-2">
               <textarea
@@ -248,7 +325,17 @@ export default function PracticeRoom({
             </div>
           )}
 
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center justify-between gap-2 sm:gap-3">
+            <button 
+              onClick={() => setShowHintsDrawer(!showHintsDrawer)}
+              className={`p-3.5 rounded-2xl border transition flex items-center gap-1.5 text-xs font-semibold ${
+                showHintsDrawer ? 'bg-amber-500/20 border-amber-500/50 text-amber-300' : 'bg-slate-900 border-slate-800 text-slate-300'
+              }`}
+            >
+               <Lightbulb className="w-5 h-5" />
+               <span className="hidden sm:inline">Pistas</span>
+            </button>
+
             <button onClick={() => setShowPanicModal(true)} className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800 text-slate-300">
               <HelpCircle className="w-5 h-5" />
             </button>
@@ -256,20 +343,19 @@ export default function PracticeRoom({
             <button
               onClick={() => (isListening ? stopListening() : startListening())}
               disabled={isAiThinking || isTranscribing}
-              className={`flex-1 py-4 px-6 rounded-3xl font-bold text-sm flex items-center justify-center gap-2.5 shadow-xl transition-all ${
+              className={`flex-1 py-4 px-2 sm:px-6 rounded-3xl font-bold text-sm flex items-center justify-center gap-1.5 sm:gap-2.5 shadow-xl transition-all ${
                 isListening
                   ? 'bg-rose-600 text-white ring-4 ring-rose-500/30 animate-pulse'
                   : 'bg-gradient-to-r from-indigo-600 to-blue-600'
               }`}
             >
-              {micMode === 'ptt' ? <Mic className="w-5 h-5" /> : <Radio className="w-5 h-5" />}
-              <span>{isListening ? 'Detener Grabación' : 'Grabar Audio'}</span>
+              {micMode === 'ptt' ? <Mic className="w-5 h-5 shrink-0" /> : <Radio className="w-5 h-5 shrink-0" />}
+              <span className="truncate">{isListening ? 'Detener' : 'Grabar Audio'}</span>
             </button>
           </div>
         </div>
       </footer>
 
-      {/* Sheet de Ajustes e Interfaz de Pánico (Ocultos por brevedad visual en este bloque, se mantienen iguales a tu código original) */}
       {showSettingsSheet && (
           <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4">
              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative w-full max-w-md">
