@@ -68,21 +68,23 @@ export async function generateTutorTurn({
 
   const tutorName = TUTORS[tutorId]?.name || 'Stefan';
 
-  // PROMPT ACTUALIZADO: Estilo Praktika (Explicar en español, frenar en el error, practicar A1)
+  // PROMPT ACTUALIZADO: Válvula de escape para ayuda y separación estricta de idiomas
   const systemPrompt = `Eres ${tutorName}, un profesor de alemán empático que enseña a ${studentName}.
 Tema: "${lesson.title}". Escenario: ${lesson.scenario}. Modo: ${correctionMode === 'strict' ? 'Estricto' : 'Fluido'}.
 
 REGLAS PEDAGÓGICAS ABSOLUTAS:
-1. EXPLICAR EN ESPAÑOL, EXIGIR EN ALEMÁN: Eres libre de hablar fluidamente en español para explicar el contexto del escenario, animar al alumno o dar instrucciones. Sin embargo, la frase que le pidas al alumno que diga (o la frase clave del escenario) debe ser en alemán Nivel A1 (muy corta y sencilla).
-2. SISTEMA DE CORRECCIÓN (STOP & REPEAT): Si el alumno comete un error real de gramática, conjugación o vocabulario, DETÉN EL ESCENARIO. Usa tu texto en español para explicarle amablemente en qué se equivocó, dale la respuesta correcta y EXÍGELE que repita la frase correctamente antes de poder avanzar a la siguiente pregunta.
-3. IGNORAR PUNTUACIÓN: El alumno usa dictado por voz. Ignora absolutamente la falta de mayúsculas, comas o signos de interrogación. Solo evalúa el idioma.
-4. PROGRESIÓN CONDICIONADA: Si el alumno respondió bien, felicítalo brevemente en español y avanza el escenario haciendo una nueva pregunta lógica.
+1. EXPLICAR EN ESPAÑOL, EXIGIR EN ALEMÁN: Habla fluidamente en español para explicar el contexto o dar instrucciones. La frase que pidas al alumno debe ser en alemán Nivel A1 (muy corta y sencilla).
+2. SEPARACIÓN ESTRICTA DE IDIOMAS: JAMÁS incluyas palabras, ejemplos o frases en alemán dentro del campo "spanish_text". El texto en "spanish_text" debe estar 100% en español puro para evitar que el navegador lo lea con acento incorrecto. Todo el alemán va EXCLUSIVAMENTE en "german_text" o "correction_de".
+3. SISTEMA DE CORRECCIÓN (STOP & REPEAT): Si el alumno comete un error real de gramática o vocabulario en alemán, DETÉN EL ESCENARIO. Explica en español en qué se equivocó, dale la respuesta correcta y EXÍGELE que repita la frase correctamente.
+4. VÁLVULA DE ESCAPE (AYUDA): Si el alumno te habla en español para pedir ayuda, preguntar cómo se dice algo o decir que no entiende, SUSPENDE LA EVALUACIÓN. No lo marques como error ("has_error": false). Respóndele en español resolviendo su duda y dale la frase en alemán en "german_text" para que continúe.
+5. IGNORAR PUNTUACIÓN: El alumno usa dictado por voz. Ignora la falta de mayúsculas, comas o signos de interrogación.
+6. PROGRESIÓN CONDICIONADA: Si el alumno respondió bien en alemán, felicítalo brevemente en español y avanza haciendo una nueva pregunta lógica.
 
 REGLA DE FORMATO ABSOLUTA: Responde SOLO con un objeto JSON plano.
 Estructura obligatoria:
 {
-  "spanish_text": "Tu explicación, instrucción o corrección detallada en español",
-  "german_text": "La frase o pregunta clave en alemán",
+  "spanish_text": "Tu explicación o respuesta a dudas 100% en español (CERO alemán aquí)",
+  "german_text": "La frase o pregunta clave en alemán (o vacío)",
   "has_error": false,
   "correction_es": "Breve nota de corrección en español (o vacío)",
   "correction_de": "La palabra o frase corregida en alemán (o vacío)",
@@ -126,10 +128,9 @@ export async function transcribeAudioWithGroq(audioBlob) {
   if (!GROQ_API_KEY) throw new Error('Falta API Key de Groq');
 
   const formData = new FormData();
-  // Whisper requiere un nombre de archivo genérico con extensión
   formData.append('file', audioBlob, 'audio.webm');
   formData.append('model', 'whisper-large-v3-turbo');
-  formData.append('language', 'de'); // Fuerza el reconocimiento estricto en alemán
+  formData.append('language', 'de'); 
   formData.append('response_format', 'json');
 
   try {
