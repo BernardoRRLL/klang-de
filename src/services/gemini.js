@@ -72,20 +72,25 @@ export async function generateTutorTurn({
 
   const tutorName = TUTORS[tutorId]?.name || 'Stefan';
 
+  // PROMPT ACTUALIZADO: Reglas estrictas de nivel A1 y tolerancia a la transcripción de voz
   const systemPrompt = `Eres ${tutorName}, profesor de alemán de ${studentName}.
 Tema: "${lesson.title}". Escenario: ${lesson.scenario}. Modo: ${correctionMode === 'strict' ? 'Estricto' : 'Fluido'}.
 
-REGLA ABSOLUTA: Responde SOLO con un objeto JSON plano. Separa estrictamente tu explicación en español de tu frase en alemán.
+REGLAS PEDAGÓGICAS ABSOLUTAS:
+1. NIVEL A1 (PRINCIPIANTE): Tus frases en alemán DEBEN ser extremadamente simples, directas y cortas (máximo 1 o 2 líneas). NO uses oraciones compuestas, gramática compleja ni vocabulario avanzado.
+2. TOLERANCIA DE TRANSCRIPCIÓN: El texto del alumno es generado por reconocimiento de voz. IGNORA TOTALMENTE la falta de mayúsculas, comas, puntos o signos de interrogación. SOLO marca error ("has_error": true) si hay fallos reales de conjugación, declinación o vocabulario incorrecto.
+
+REGLA DE FORMATO ABSOLUTA: Responde SOLO con un objeto JSON plano.
 Estructura obligatoria:
 {
-  "spanish_text": "Tu comentario, explicación o saludo en español nativo",
-  "german_text": "La frase principal en alemán nativo",
+  "spanish_text": "Tu comentario o explicación breve en español nativo",
+  "german_text": "La frase principal en alemán nativo (muy corta y fácil)",
   "has_error": false,
-  "correction_es": "Si cometió un error, explícalo brevemente aquí en español (o vacío)",
+  "correction_es": "Si cometió un error real de gramática/vocabulario, explícalo aquí brevemente en español (o vacío)",
   "correction_de": "La corrección exacta en alemán (o vacío)",
   "suggestions": [
-    {"de": "Opción 1 en alemán", "es": "Traducción 1"},
-    {"de": "Opción 2 en alemán", "es": "Traducción 2"}
+    {"de": "Opción 1 en alemán básico", "es": "Traducción 1"},
+    {"de": "Opción 2 en alemán básico", "es": "Traducción 2"}
   ]
 }`;
 
@@ -103,7 +108,7 @@ Estructura obligatoria:
   if (!isInitial) {
     messages.push({ role: 'user', content: `El alumno dijo: "${userText}"` });
   } else {
-    messages.push({ role: 'user', content: `Inicia la clase saludando y proponiendo el primer ejercicio.` });
+    messages.push({ role: 'user', content: `Inicia la clase saludando brevemente y haciendo una pregunta fácil sobre el tema.` });
   }
 
   return callGroqWithFallback(messages);
@@ -113,7 +118,7 @@ export async function translatePanicQuery(query) {
   if (!GROQ_API_KEY) throw new Error('Falta API Key de Groq');
   
   const messages = [
-    { role: 'system', content: 'Traduce al alemán. Devuelve SOLO JSON: {"german": "...", "spanish": "...", "phonetic": "...", "tip": "..."}' },
+    { role: 'system', content: 'Traduce al alemán de forma sencilla (Nivel A1). Devuelve SOLO JSON: {"german": "...", "spanish": "...", "phonetic": "...", "tip": "..."}' },
     { role: 'user', content: query }
   ];
   
