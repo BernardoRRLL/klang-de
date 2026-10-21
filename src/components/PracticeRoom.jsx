@@ -36,6 +36,9 @@ export default function PracticeRoom({
 
   const recognitionRef = useRef(null);
   const chatEndRef = useRef(null);
+  
+  // Novedad: Control del timeout de silencio para forzar el envío del audio
+  const silenceTimerRef = useRef(null);
 
   const activeTutor = TUTORS[tutorId] || TUTORS.stefan;
   const userTurnsCount = messages.filter((m) => m.role === 'user').length;
@@ -74,7 +77,7 @@ export default function PracticeRoom({
     const recognition = new SpeechRecognition();
     recognition.lang = 'de-DE';
     recognition.interimResults = true;
-    recognition.continuous = micMode === 'ptt';
+    recognition.continuous = true; // Forzamos continuous para evitar cortes de la API nativa
 
     let finalCollected = '';
 
@@ -84,6 +87,9 @@ export default function PracticeRoom({
     };
 
     recognition.onresult = (event) => {
+      // Limpiar el timer si el usuario sigue hablando
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+
       let interim = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const transcript = event.results[i][0].transcript;
@@ -93,13 +99,17 @@ export default function PracticeRoom({
           interim += transcript;
         }
       }
+      
       const combined = (finalCollected + interim).trim();
       setLiveTranscript(combined);
 
-      if (micMode === 'auto' && finalCollected.trim().length > 0) {
-        recognition.stop();
-        onSendUserTurn(finalCollected.trim());
-        setLiveTranscript('');
+      // Si estamos en modo auto, enviamos el texto si hay 1.5s de silencio
+      if (micMode === 'auto' && combined.length > 0) {
+        silenceTimerRef.current = setTimeout(() => {
+            recognition.stop();
+            onSendUserTurn(combined);
+            setLiveTranscript('');
+        }, 1500); 
       }
     };
 
@@ -111,6 +121,7 @@ export default function PracticeRoom({
   };
 
   const stopListeningAndSend = () => {
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     if (recognitionRef.current) recognitionRef.current.stop();
     setIsListening(false);
     if (liveTranscript.trim()) {
@@ -137,6 +148,9 @@ export default function PracticeRoom({
       setIsPanicLoading(false);
     }
   };
+
+  // Novedad: Lógica visual para la cascada (si hay un apiError pero la app avanza)
+  const isFallbackActive = apiError && apiError.includes('falló');
 
   return (
     <div className="h-screen bg-slate-950 text-slate-100 flex flex-col overflow-hidden select-none">
@@ -180,7 +194,14 @@ export default function PracticeRoom({
         </div>
       </header>
 
-      <div className="py-5 px-4 flex flex-col items-center justify-center border-b border-slate-900/60 bg-gradient-to-b from-slate-900/40 to-slate-950 shrink-0">
+      <div className="py-5 px-4 flex flex-col items-center justify-center border-b border-slate-900/60 bg-gradient-to-b from-slate-900/40 to-slate-950 shrink-0 relative">
+        {/* Indicador de Respaldo */}
+        {isFallbackActive && (
+             <div className="absolute top-2 right-4 flex items-center gap-1 text-[10px] text-amber-500 font-bold border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 rounded-full">
+                <AlertTriangle className="w-3 h-3" /> Motor Respaldo
+             </div>
+        )}
+
         <button
           onClick={() => {
             const lastTutor = [...messages].reverse().find((m) => m.role === 'tutor');
@@ -218,13 +239,6 @@ export default function PracticeRoom({
           </span>
         </div>
       </div>
-
-      {apiError && (
-        <div className="mx-4 mt-2 rounded-2xl bg-rose-950/70 border border-rose-800 px-3.5 py-2 text-xs text-rose-200 flex items-center gap-2">
-          <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-          <span className="truncate">{apiError}</span>
-        </div>
-      )}
 
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 max-w-2xl mx-auto w-full">
         {messages.map((msg) => {
