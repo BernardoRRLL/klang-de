@@ -1,13 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabaseService } from './services/supabase';
 import { generateTutorTurn } from './services/gemini';
+import ErrorBoundary from './components/ErrorBoundary';
 import LoginScreen from './components/LoginScreen';
 import ProfilePicker from './components/ProfilePicker';
 import Dashboard from './components/Dashboard';
 import PracticeRoom from './components/PracticeRoom';
 import NotebookView from './components/NotebookView';
 
-export default function App() {
+// Función auxiliar para generar IDs seguros
+const generateId = () => {
+  return crypto.randomUUID ? crypto.randomUUID() : `id-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+};
+
+function AppContent() {
   const [authSession, setAuthSession] = useState(() => supabaseService.getCurrentSession());
   const [profiles, setProfiles] = useState([]);
   const [activeProfileId, setActiveProfileId] = useState(null);
@@ -89,7 +95,6 @@ export default function App() {
 
       if (availableVoices.length > 0) {
         if (lang === 'de') {
-          // Identificadores comunes en motores TTS nativos (iOS, Android, Windows, macOS)
           const maleNames = ['stefan', 'martin', 'markus', 'yannick', 'david', 'male', 'hombre'];
           const femaleNames = ['anna', 'helena', 'petra', 'hedda', 'katja', 'marlene', 'female', 'mujer'];
 
@@ -101,10 +106,8 @@ export default function App() {
             preferredVoice = availableVoices.find(v => femaleNames.some(name => v.name.toLowerCase().includes(name)));
           }
 
-          // Si no encuentra una de género específico, usa Google por defecto o la primera disponible
           utterance.voice = preferredVoice || availableVoices.find(v => v.name.includes('Google')) || availableVoices[0];
         } else {
-          // Para el texto en español, busca una voz estándar
           utterance.voice = availableVoices.find(v => v.name.includes('Google')) || availableVoices[0];
         }
       }
@@ -146,7 +149,7 @@ export default function App() {
       return;
     }
 
-    const newSessionId = crypto.randomUUID ? crypto.randomUUID() : `sess-${Date.now()}`;
+    const newSessionId = generateId();
     setActiveSessionId(newSessionId);
     setMessages([]);
     setSuggestedReplies([]);
@@ -165,10 +168,11 @@ export default function App() {
       });
 
       const firstMsg = {
-        id: Date.now(),
+        id: generateId(),
         role: 'tutor',
         spanish_text: aiRes.spanish_text || '',
         german_text: aiRes.german_text || '',
+        translation_es: aiRes.translation_es || '', // <-- Recibimos la nueva traducción
         has_error: aiRes.has_error || false,
         correction_es: aiRes.correction_es || '',
         correction_de: aiRes.correction_de || '',
@@ -211,7 +215,7 @@ export default function App() {
     if (!userText.trim() || isAiThinking || !activeProfile) return;
     setApiError('');
 
-    const userMsg = { id: Date.now(), role: 'user', text: userText.trim() };
+    const userMsg = { id: generateId(), role: 'user', text: userText.trim() };
     const updatedHistory = [...messages, userMsg];
     setMessages(updatedHistory);
     setIsAiThinking(true);
@@ -228,10 +232,11 @@ export default function App() {
       });
 
       const tutorMsg = {
-        id: Date.now() + 1,
+        id: generateId(),
         role: 'tutor',
         spanish_text: aiRes.spanish_text || '',
         german_text: aiRes.german_text || '',
+        translation_es: aiRes.translation_es || '', // <-- Recibimos la nueva traducción
         has_error: aiRes.has_error || false,
         correction_es: aiRes.correction_es || '',
         correction_de: aiRes.correction_de || '',
@@ -392,5 +397,14 @@ export default function App() {
       onOpenNotebook={() => setView('notebook')}
       onStartLesson={handleStartLesson}
     />
+  );
+}
+
+// Envolvemos todo el componente en el ErrorBoundary
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppContent />
+    </ErrorBoundary>
   );
 }
