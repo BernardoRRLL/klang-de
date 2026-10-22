@@ -8,10 +8,17 @@ const GROQ_MODELS = [
   'gemma2-9b-it'
 ];
 
+// Tiempo máximo de espera por modelo (en milisegundos). 
+// 8000 = 8 segundos.
+const TIMEOUT_MS = 8000; 
+
 async function callGroqWithFallback(messages) {
   let lastError = null;
 
   for (const modelName of GROQ_MODELS) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
     try {
       const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
@@ -24,8 +31,11 @@ async function callGroqWithFallback(messages) {
           messages: messages,
           temperature: 0.6,
           response_format: { type: "json_object" }
-        })
+        }),
+        signal: controller.signal // <-- Aquí conectamos el temporizador
       });
+
+      clearTimeout(timeoutId); // Si responde a tiempo, cancelamos el temporizador
 
       if (res.status === 404 || res.status === 400) {
         const errText = await res.text();
@@ -47,6 +57,15 @@ async function callGroqWithFallback(messages) {
       return JSON.parse(cleaned);
 
     } catch (err) {
+      clearTimeout(timeoutId);
+      
+      // Si el error fue por el temporizador (AbortError)
+      if (err.name === 'AbortError') {
+        lastError = new Error(`El modelo ${modelName} tardó demasiado (Timeout).`);
+        console.warn(`[Groq] Timeout en ${modelName}. Pasando al siguiente modelo...`);
+        continue; // Salta al siguiente modelo de la cascada
+      }
+
       lastError = err;
       if (err.message.includes('401')) throw err;
     }
@@ -68,7 +87,7 @@ export async function generateTutorTurn({
 
   const tutorName = TUTORS[tutorId]?.name || 'Stefan';
 
-  // PROMPT ACTUALIZADO: Válvula de escape para ayuda y separación estricta de idiomas
+  // PROMPT ACTUALIZADO: Añadimos "translation_es" a la regla de formato.
   const systemPrompt = `Eres ${tutorName}, un profesor de alemán empático que enseña a ${studentName}.
 Tema: "${lesson.title}". Escenario: ${lesson.scenario}. Modo: ${correctionMode === 'strict' ? 'Estricto' : 'Fluido'}.
 
@@ -85,6 +104,7 @@ Estructura obligatoria:
 {
   "spanish_text": "Tu explicación o respuesta a dudas 100% en español (CERO alemán aquí)",
   "german_text": "La frase o pregunta clave en alemán (o vacío)",
+  "translation_es": "La traducción exacta al español de lo que dice german_text (o vacío si no hay german_text)",
   "has_error": false,
   "correction_es": "Breve nota de corrección en español (o vacío)",
   "correction_de": "La palabra o frase corregida en alemán (o vacío)",
@@ -97,7 +117,8 @@ Estructura obligatoria:
     { role: 'system', content: systemPrompt }
   ];
 
-  history.slice(-10).forEach((msg) => {
+  // Aumentamos el historial de 10 a 15 mensajes
+  history.slice(-15).forEach((msg) => {
     messages.push({
       role: msg.role === 'user' ? 'user' : 'assistant',
       content: msg.rawText || msg.text || `${msg.spanish_text} ${msg.german_text}`
