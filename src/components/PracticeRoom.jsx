@@ -28,6 +28,7 @@ export default function PracticeRoom({
   const [isListening, setIsListening] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [liveTranscript, setLiveTranscript] = useState('');
+  const [errorMessage, setErrorMessage] = useState(''); // <-- Nuevo estado para errores
   
   const [showHintsDrawer, setShowHintsDrawer] = useState(false);
   const [showSettingsSheet, setShowSettingsSheet] = useState(false);
@@ -58,20 +59,35 @@ export default function PracticeRoom({
   };
 
   const startListening = async () => {
+    setErrorMessage(''); // Limpiar errores previos
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     setLiveTranscript('');
     
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
+      
+      // Detección básica para Safari (iOS/macOS) donde webm no está soportado
+      const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+      const mimeType = isSafari ? 'audio/mp4' : 'audio/webm';
+      
+      const options = MediaRecorder.isTypeSupported(mimeType) ? { mimeType } : {};
+      const mediaRecorder = new MediaRecorder(stream, options);
       audioChunksRef.current = [];
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) audioChunksRef.current.push(event.data);
       };
 
+      mediaRecorder.onerror = (e) => {
+        console.error("Error de MediaRecorder:", e.error);
+        setErrorMessage("Hubo un error con el micrófono. Intenta de nuevo.");
+        stopListening();
+      };
+
       mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        // Usamos el tipo de formato que logramos grabar
+        const blobType = mediaRecorder.mimeType || mimeType;
+        const audioBlob = new Blob(audioChunksRef.current, { type: blobType });
         stream.getTracks().forEach(track => track.stop()); 
         
         setIsTranscribing(true);
@@ -84,7 +100,7 @@ export default function PracticeRoom({
           }
         } catch (err) {
           console.error(err);
-          alert("Error transcribiendo el audio.");
+          setErrorMessage("Error transcribiendo el audio. Revisa tu conexión.");
         } finally {
           setIsTranscribing(false);
         }
@@ -94,7 +110,7 @@ export default function PracticeRoom({
       mediaRecorder.start();
       setIsListening(true);
     } catch (err) {
-      alert('Debes dar permiso al micrófono en tu navegador celular para usar esta función.');
+      setErrorMessage('Debes dar permiso al micrófono en tu navegador para usar esta función.');
     }
   };
 
@@ -196,6 +212,16 @@ export default function PracticeRoom({
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 max-w-2xl mx-auto w-full">
+        {/* Banner de error local para reemplazar los alerts */}
+        {errorMessage && (
+          <div className="bg-rose-950/50 border border-rose-800 text-rose-200 px-4 py-3 rounded-2xl flex items-center justify-between text-sm shadow-lg mx-2">
+            <span>{errorMessage}</span>
+            <button onClick={() => setErrorMessage('')} className="p-1 hover:bg-rose-900/50 rounded-lg">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {messages.map((msg) => {
           if (msg.role === 'user') {
             return (
@@ -227,9 +253,9 @@ export default function PracticeRoom({
                   <div className="rounded-2xl bg-slate-950/90 border border-slate-800/80 p-3 flex flex-col gap-2 mt-2">
                     <div className="flex items-start justify-between gap-3">
                       <p className={`font-bold text-sm transition-colors duration-300 ${isRevealed ? 'text-sky-300' : 'text-amber-300'}`}>
-                         {isRevealed && msg.suggestions && msg.suggestions.length > 0 
-                            // Intentamos usar la primera sugerencia como traducción aproximada si la pediste, o un texto de aviso si no hay
-                            ? msg.suggestions[0]?.es || "No hay traducción exacta disponible para esta frase."
+                         {/* AHORA USAMOS msg.translation_es DIRECTAMENTE */}
+                         {isRevealed 
+                            ? msg.translation_es || "Traducción no disponible." 
                             : msg.german_text}
                       </p>
                       
@@ -270,7 +296,6 @@ export default function PracticeRoom({
               Ocultar
             </button>
           </div>
-          {/* Modificado para scroll horizontal en celulares si son muchas */}
           <div className="flex sm:grid sm:grid-cols-3 gap-2 overflow-x-auto pb-2 snap-x">
             {suggestedReplies.map((reply, i) => (
               <div key={i} className="min-w-[240px] sm:min-w-0 rounded-2xl bg-slate-950 border border-slate-800 p-2.5 flex flex-col justify-between gap-1.5 snap-center">
